@@ -32,8 +32,10 @@
     .row-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.weight-edit{display:flex;gap:6px;align-items:center;margin-top:9px;font-size:11px}
     .weight-edit input{width:88px;min-height:34px;border:1px solid var(--line);border-radius:7px;padding:5px}
     .table-wrap{overflow-x:auto}.table{width:100%;border-collapse:collapse;font-size:11px}.table th,.table td{text-align:right;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}.table th{color:var(--muted);font-weight:600}
-    .empty{color:var(--muted);font-size:12px;padding:12px}.bottom{position:fixed;bottom:0;left:0;right:0;background:#ffffffef;border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(5,1fr);padding:6px 3px calc(6px + env(safe-area-inset-bottom));z-index:4;backdrop-filter:blur(8px)}
+    .empty{color:var(--muted);font-size:12px;padding:12px}.bottom{position:fixed;bottom:0;left:0;right:0;background:#ffffffef;border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(6,minmax(0,1fr));padding:6px 3px calc(6px + env(safe-area-inset-bottom));z-index:4;backdrop-filter:blur(8px)}
     .nav{border:0;background:transparent;color:#71828b;font-size:10px;padding:5px 2px}.nav span{display:block;font-size:18px;margin-bottom:2px}.nav.active{color:var(--teal);font-weight:700}
+    .category-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.category-tabs .btn.active{background:var(--teal);color:white}
+    details{border-top:1px solid var(--line);margin-top:10px;padding-top:9px}summary{cursor:pointer;color:var(--teal);font-size:12px;font-weight:600}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}.detail-grid div{min-width:0}.detail-grid small{display:block;color:var(--muted);font-size:10px}.detail-grid span{font-size:12px;overflow-wrap:anywhere}
     .toast{position:fixed;bottom:82px;left:50%;transform:translateX(-50%);background:#183747;color:white;padding:10px 14px;border-radius:9px;font-size:12px;z-index:5;max-width:90vw}
     @media(min-width:700px){.top{padding-left:max(16px,calc((100vw - 1000px)/2));padding-right:max(16px,calc((100vw - 1000px)/2))}.wrap{padding-top:24px}.stats{grid-template-columns:repeat(4,1fr)}.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.full{grid-column:auto}.full.wide{grid-column:1/-1}.bottom{position:sticky;top:56px;display:flex;justify-content:center;border-top:0;border-bottom:1px solid var(--line);padding:5px;background:white}.nav{width:145px;font-size:12px}.nav span{display:none}}
   </style>
@@ -53,6 +55,7 @@
     <button class="nav" data-page="add" onclick="openPage('add')"><span>＋</span>إضافة</button>
     <button class="nav" data-page="track" onclick="openPage('track')"><span>◷</span>الكرتون</button>
     <button class="nav" data-page="stock" onclick="openPage('stock')"><span>▥</span>الأرصدة</button>
+    <button class="nav" data-page="powder" onclick="openPage('powder')"><span>▦</span>قائمة البودرة</button>
     <button class="nav" data-page="moves" onclick="openPage('moves')"><span>↻</span>الحركات</button>
   </nav>
   <main class="wrap" id="page"></main>
@@ -71,7 +74,7 @@
     }
     let state;
     try{state=loadState()}catch(error){document.getElementById('page').innerHTML='<section class="card"><h2>تعذر فتح بيانات هذا المتصفح</h2><p class="sub">'+escapeHtml(error.message)+'</p></section>';throw error}
-    let activePage='home',showConsumed=false,toastTimer;
+    let activePage='home',showConsumed=false,toastTimer,powderCategory='ألوان',powderItem='',editingCartonId=null;
     const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
     function persist(){
       try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state))}
@@ -83,7 +86,7 @@
     function activeCartons(){return state.cartons.filter(item=>!item.deleted)}
     function openPage(page){
       activePage=page;document.querySelectorAll('.nav').forEach(button=>button.classList.toggle('active',button.dataset.page===page));
-      ({home:renderHome,add:renderAdd,track:renderTrack,stock:renderStock,moves:renderMoves}[page]||renderHome)();
+      ({home:renderHome,add:renderAdd,track:renderTrack,stock:renderStock,powder:renderPowder,moves:renderMoves}[page]||renderHome)();
       window.scrollTo(0,0);
     }
     function title(heading,description=''){return `<div class="title"><h1>${heading}</h1><p>${description}</p></div>`}
@@ -122,13 +125,13 @@
       select.innerHTML=values.map(value=>`<option>${escapeHtml(value)}</option>`).join('');
       if(values.includes(previous))select.value=previous;
     }
-    function addCustomItem(){
-      const category=document.getElementById('category').value;
+    function addCustomItem(categoryOverride){
+      const category=categoryOverride||document.getElementById('category').value;
       const value=prompt(category==='ألوان'?'أدخل رقم اللون الجديد:':'أدخل اسم نوع الخشامنيوم:');
       if(!value||!value.trim())return;
       const list=category==='ألوان'?state.colors:state.textures;
       if(!list.includes(value.trim()))list.push(value.trim());
-      persist();renderAdd();
+      persist();if(activePage==='powder')renderPowder();else renderAdd();
     }
     function saveMapping(){
       const code=document.getElementById('mapCode').value.trim().toUpperCase(),color=document.getElementById('mapColor').value;
@@ -173,14 +176,78 @@
     }
     function deleteCarton(id){
       const item=state.cartons.find(row=>row.id===id&&!row.deleted);if(!item||!confirm('ستختفي الكرتونة من الرصيد النشط مع بقاء سجلها. هل تريد المتابعة؟'))return;
-      item.deleted=true;item.updated_at=timestamp();record(item,'حذف الكرتونة من الرصيد',`${item.remaining_weight} كجم`);persist();renderTrack();
+      item.deleted=true;item.updated_at=timestamp();record(item,'حذف الكرتونة من الرصيد',`${item.remaining_weight} كجم`);persist();if(activePage==='powder')renderPowder();else renderTrack();
     }
     function renderStock(){
       const groups=new Map();
       activeCartons().filter(item=>!item.consumed).forEach(item=>{const key=item.category+'|'+item.color;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item)});
       const rows=[...groups.entries()];
-      document.getElementById('page').innerHTML=title('الأرصدة الحالية','العدد والوزن حسب الفئة واللون.')+
-        `<section class="card">${rows.length?`<div class="table-wrap"><table class="table"><thead><tr><th>الفئة / اللون</th><th>العدد</th><th>الإنتاج</th><th>الانتهاء</th><th>الوزن</th><th>مفتوحة</th></tr></thead><tbody>${rows.map(([key,items])=>`<tr><td>${escapeHtml(key.replace('|',' / '))}</td><td>${items.length}</td><td>${escapeHtml(items[0].production||'—')}</td><td>${escapeHtml(items[0].expiry||'—')}</td><td>${items.reduce((sum,item)=>sum+Number(item.remaining_weight),0).toFixed(1)} كجم</td><td>${items.filter(item=>item.opened).length}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">لا توجد أرصدة مسجلة.</div>'}</section>`;
+      const page=document.getElementById('page');
+      page.innerHTML=title('الأرصدة الحالية','العدد والوزن حسب الفئة واللون.')+
+        `<section class="card">${rows.length?`<div class="table-wrap"><table class="table"><thead><tr><th>الفئة / اللون</th><th>العدد</th><th>الإنتاج</th><th>الانتهاء</th><th>الوزن</th><th>مفتوحة</th><th>تغيير الحالة</th></tr></thead><tbody>${rows.map(([key,items])=>`<tr><td>${escapeHtml(key.replace('|',' / '))}</td><td>${items.length}</td><td>${escapeHtml(items[0].production||'—')}</td><td>${escapeHtml(items[0].expiry||'—')}</td><td>${items.reduce((sum,item)=>sum+Number(item.remaining_weight),0).toFixed(1)} كجم</td><td>${items.filter(item=>item.opened).length}</td><td><button class="btn small" data-stock-key="${escapeHtml(key)}">${items.every(item=>item.opened)?'إلغاء الفتح':'تحديد مفتوحة'}</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">لا توجد أرصدة مسجلة.</div>'}</section>`;
+      page.querySelectorAll('[data-stock-key]').forEach(button=>button.addEventListener('click',()=>toggleStockOpened(button.dataset.stockKey)));
+    }
+    function toggleStockOpened(key){
+      const rows=activeCartons().filter(item=>!item.consumed&&item.category+'|'+item.color===key);
+      if(!rows.length)return;
+      const opened=!rows.every(item=>item.opened),at=timestamp();
+      rows.forEach(item=>{item.opened=opened;item.updated_at=at;record(item,opened?'تغيير حالة الفتح إلى مفتوحة':'إلغاء حالة الفتح',`${item.remaining_weight} كجم`)});
+      persist();renderStock();
+    }
+    function selectPowderCategory(category){
+      powderCategory=category;powderItem='';renderPowder();
+    }
+    function renderPowder(){
+      if(editingCartonId){renderCartonEditor();return}
+      const items=powderCategory==='ألوان'?state.colors:state.textures;
+      if(!items.includes(powderItem))powderItem=powderCategory==='ألوان'&&items.includes('9016')?'9016':items[0]||'';
+      const page=document.getElementById('page');
+      page.innerHTML=title('قائمة البودرة','اختر الفئة والصنف لعرض الرصيد وتفاصيل الكراتين.')+
+        `<section class="card"><div class="category-tabs"><button class="btn ${powderCategory==='ألوان'?'active':''}" onclick="selectPowderCategory('ألوان')">ألوان</button><button class="btn ${powderCategory==='خشامنيوم'?'active':''}" onclick="selectPowderCategory('خشامنيوم')">خشامنيوم</button></div><div class="powder-list">${items.map(item=>`<button class="chip ${item===powderItem?'active':''}" data-powder-item="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join('')||'<span class="empty">لا توجد أصناف.</span>'}</div><button class="btn small" id="addPowderItem">＋ إضافة لون/نوع</button></section>`;
+      page.querySelectorAll('[data-powder-item]').forEach(button=>button.addEventListener('click',()=>{powderItem=button.dataset.powderItem;renderPowder()}));
+      document.getElementById('addPowderItem').addEventListener('click',()=>addCustomItem(powderCategory));
+      const rows=activeCartons().filter(item=>!item.consumed&&item.category===powderCategory&&item.color===powderItem);
+      const weight=rows.reduce((sum,item)=>sum+Number(item.remaining_weight),0);
+      page.insertAdjacentHTML('beforeend',`<section class="card"><h2>${escapeHtml(powderCategory)} / ${escapeHtml(powderItem||'—')}</h2><p class="sub">عدد الكراتين: ${rows.length} · الوزن المتبقي: ${weight.toFixed(1)} كجم</p>${rows.length?rows.map(powderCartonCard).join(''):'<div class="empty">لا يوجد رصيد متاح لهذا الصنف.</div>'}</section>`);
+    }
+    function powderCartonCard(item){
+      const values=[['الشركة',item.company],['الفئة',item.category],['اللون / النوع',item.color],['كود المنتج',item.product_code],['كود الاستيكر',item.sticker_code],['رقم التشغيلة',item.batch],['تاريخ الإنتاج',item.production],['تاريخ الانتهاء',item.expiry],['الوزن الأصلي',`${item.initial_weight} كجم`],['الوزن المتبقي',`${item.remaining_weight} كجم`],['الطرف المرسل',item.sender],['حالة الفتح',item.opened?'مفتوحة':'غير مفتوحة'],['ملاحظات',item.notes],['تاريخ الإضافة',item.created_at],['أضيفت بواسطة',item.created_by],['صورة الاستيكر',item.image_path]];
+      const status=item.factory?'داخل المصنع':item.opened?'مفتوحة':'في المخزن';
+      return `<article class="row-card"><div class="row-head"><div><div class="row-title">كرتونة ${item.id}</div><div class="meta">تشغيلة ${escapeHtml(item.batch||'—')} · منتج ${escapeHtml(item.product_code||'—')}<br>الإنتاج ${escapeHtml(item.production||'—')} · الانتهاء ${escapeHtml(item.expiry||'—')}<br>${item.remaining_weight} من ${item.initial_weight} كجم</div></div><span class="pill ${item.factory?'factory':''} ${item.opened?'opened':''}">${status}</span></div><details><summary>عرض البيانات الكاملة</summary><div class="detail-grid">${values.map(([label,value])=>`<div><small>${label}</small><span>${escapeHtml(value||'—')}</span></div>`).join('')}</div></details><div class="row-actions"><button class="btn small primary" onclick="editCarton(${item.id})">تعديل البيانات</button><button class="btn small danger" onclick="deleteCarton(${item.id})">حذف من الرصيد</button></div></article>`;
+    }
+    function editCarton(id){
+      const item=state.cartons.find(row=>row.id===id&&!row.deleted);
+      if(!item)return;
+      editingCartonId=id;renderCartonEditor();
+    }
+    function renderCartonEditor(){
+      const item=state.cartons.find(row=>row.id===editingCartonId&&!row.deleted);
+      if(!item){editingCartonId=null;renderPowder();return}
+      const colors=state.colors.map(value=>`<option>${escapeHtml(value)}</option>`).join('');
+      const textures=state.textures.map(value=>`<option>${escapeHtml(value)}</option>`).join('');
+      const field=(id,label,value,type='text')=>`<div class="field"><label>${label}</label><input id="${id}" type="${type}" value="${escapeHtml(value??'')}"></div>`;
+      document.getElementById('page').innerHTML=title(`تعديل الكرتونة ${item.id}`,'عدّل البيانات ثم احفظ؛ سيُضاف سجل حركة للتعديل.')+
+        `<section class="card"><div class="grid"><div class="field"><label>الشركة</label><select id="editCompany"><option>AkzoNobel</option><option>Union</option><option>Jetton</option></select></div><div class="field"><label>الفئة</label><select id="editCategory" onchange="updateEditColorOptions()"><option>ألوان</option><option>خشامنيوم</option></select></div><div class="field"><label>اللون / النوع</label><select id="editColor">${item.category==='ألوان'?colors:textures}</select></div>${field('editProduct','كود المنتج',item.product_code)}${field('editSticker','كود الاستيكر',item.sticker_code)}${field('editBatch','رقم التشغيلة',item.batch)}${field('editProduction','تاريخ الإنتاج',item.production)}${field('editExpiry','تاريخ الانتهاء',item.expiry)}${field('editInitialWeight','الوزن الأصلي (كجم)',item.initial_weight,'number')}${field('editRemainingWeight','الوزن المتبقي (كجم)',item.remaining_weight,'number')}<div class="field"><label>الطرف المرسل</label><select id="editSender"><option>M</option><option>H</option><option>A</option></select></div>${field('editNotes','ملاحظات',item.notes)}</div><div class="actions"><button class="btn primary" onclick="saveCartonEdit()">حفظ التعديلات</button><button class="btn" onclick="editingCartonId=null;renderPowder()">إلغاء</button></div></section>`;
+      document.getElementById('editCompany').value=item.company;
+      document.getElementById('editCategory').value=item.category;
+      document.getElementById('editColor').value=item.color;
+      document.getElementById('editSender').value=item.sender||'M';
+    }
+    function updateEditColorOptions(){
+      const category=document.getElementById('editCategory').value,select=document.getElementById('editColor');
+      const values=category==='ألوان'?state.colors:state.textures,previous=select.value;
+      select.innerHTML=values.map(value=>`<option>${escapeHtml(value)}</option>`).join('');
+      select.value=values.includes(previous)?previous:values[0]||'';
+    }
+    function saveCartonEdit(){
+      const item=state.cartons.find(row=>row.id===editingCartonId&&!row.deleted);
+      if(!item)return;
+      const initial=Number(document.getElementById('editInitialWeight').value),remaining=Number(document.getElementById('editRemainingWeight').value);
+      if(!Number.isFinite(initial)||!Number.isFinite(remaining)||initial<=0||remaining<0||remaining>initial){showToast('تحقق من الوزن الأصلي والمتبقي');return}
+      const previous=item.remaining_weight;
+      Object.assign(item,{company:document.getElementById('editCompany').value,category:document.getElementById('editCategory').value,color:document.getElementById('editColor').value,product_code:document.getElementById('editProduct').value.trim(),sticker_code:document.getElementById('editSticker').value.trim().toUpperCase(),batch:document.getElementById('editBatch').value.trim(),production:document.getElementById('editProduction').value.trim(),expiry:document.getElementById('editExpiry').value.trim(),initial_weight:initial,remaining_weight:remaining,sender:document.getElementById('editSender').value,notes:document.getElementById('editNotes').value.trim(),consumed:remaining===0,updated_at:timestamp()});
+      record(item,'تعديل بيانات الكرتونة',`${previous} ← ${remaining} كجم`);
+      editingCartonId=null;persist();renderPowder();
     }
     function movementTable(rows){
       if(!rows.length)return '<div class="empty">لا توجد حركات مسجلة.</div>';
