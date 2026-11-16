@@ -377,15 +377,7 @@
       const rows=[...groups.entries()];
       const page=document.getElementById('page');
       page.innerHTML=title('الأرصدة الحالية','العدد والوزن حسب الفئة واللون.')+
-        `<section class="card">${rows.length?`<div class="table-wrap"><table class="table"><thead><tr><th>الفئة / اللون</th><th>العدد</th><th>الإنتاج</th><th>الانتهاء</th><th>الوزن</th><th>مفتوحة</th><th>تغيير الحالة</th></tr></thead><tbody>${rows.map(([key,items])=>`<tr><td>${escapeHtml(key.replace('|',' / '))}</td><td>${items.length}</td><td>${escapeHtml(items[0].production||'—')}</td><td>${escapeHtml(items[0].expiry||'—')}</td><td>${items.reduce((sum,item)=>sum+Number(item.remaining_weight),0).toFixed(1)} كجم</td><td>${items.filter(item=>item.opened).length}</td><td><button class="btn small" data-stock-key="${escapeHtml(key)}">${items.every(item=>item.opened)?'إلغاء الفتح':'تحديد مفتوحة'}</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">لا توجد أرصدة مسجلة.</div>'}</section>`;
-      page.querySelectorAll('[data-stock-key]').forEach(button=>button.addEventListener('click',()=>toggleStockOpened(button.dataset.stockKey)));
-    }
-    function toggleStockOpened(key){
-      const rows=activeCartons().filter(item=>!item.consumed&&item.category+'|'+item.color===key);
-      if(!rows.length)return;
-      const opened=!rows.every(item=>item.opened),at=timestamp();
-      rows.forEach(item=>{item.opened=opened;item.updated_at=at;record(item,opened?'تغيير حالة الفتح إلى مفتوحة':'إلغاء حالة الفتح',`${item.remaining_weight} كجم`)});
-      persist();renderStock();
+        `<section class="card">${rows.length?`<div class="table-wrap"><table class="table"><thead><tr><th>الفئة / اللون</th><th>العدد</th><th>الإنتاج</th><th>الانتهاء</th><th>الوزن</th><th>مفتوحة</th></tr></thead><tbody>${rows.map(([key,items])=>`<tr><td>${escapeHtml(key.replace('|',' / '))}</td><td>${items.length}</td><td>${escapeHtml(items[0].production||'—')}</td><td>${escapeHtml(items[0].expiry||'—')}</td><td>${items.reduce((sum,item)=>sum+Number(item.remaining_weight),0).toFixed(1)} كجم</td><td>${items.filter(item=>item.opened).length}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">لا توجد أرصدة مسجلة.</div>'}</section>`;
     }
     function selectPowderCategory(category){
       powderCategory=category;powderItem='';renderPowder();

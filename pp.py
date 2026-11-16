@@ -589,17 +589,6 @@ class PowderApp:
                 category,color=self.stock_filter;rows=c.execute('SELECT category,color,COUNT(*) count,MIN(production) production,MIN(expiry) expiry,SUM(remaining_weight) weight,SUM(opened) opened FROM cartons WHERE consumed=0 AND deleted=0 AND category=? AND color=? GROUP BY category,color ORDER BY category,color',(category,color)).fetchall()
             else:rows=c.execute('SELECT category,color,COUNT(*) count,MIN(production) production,MIN(expiry) expiry,SUM(remaining_weight) weight,SUM(opened) opened FROM cartons WHERE consumed=0 AND deleted=0 GROUP BY category,color ORDER BY category,color').fetchall()
         for r in rows:tree.insert('','end',values=(r['category'],r['color'],r['count'],r['production'] or '—',r['expiry'] or '—',f"{r['weight'] or 0:g} كجم",r['opened'] or 0))
-        self.stock_tree=tree; self.button(f,'تغيير حالة مفتوحة للصف المحدد',self.toggle_opened).pack(anchor='e',pady=8)
-    def toggle_opened(self):
-        sel=self.stock_tree.selection()
-        if not sel:return messagebox.showwarning('اختر لونًا','حدد صف الفئة واللون.')
-        cat,col=self.stock_tree.item(sel[0],'values')[:2];at=now()
-        with connect() as c:rows=c.execute('SELECT id,opened,remaining_weight FROM cartons WHERE category=? AND color=? AND consumed=0 AND deleted=0',(cat,col)).fetchall()
-        if not rows:return
-        new=0 if all(r['opened'] for r in rows) else 1
-        with connect() as c:
-            for r in rows:c.execute('UPDATE cartons SET opened=?,updated_at=? WHERE id=?',(new,at,r['id']));c.execute('INSERT INTO movements(carton_id,at,action,weight,user) VALUES(?,?,?,?,?)',(r['id'],at,'تغيير حالة الفتح إلى مفتوحة' if new else 'إلغاء حالة الفتح',f"{r['remaining_weight']:g} كجم",self.current_user()['username']))
-        self.refresh_all()
     def refresh_moves(self):
         for w in self.moves_tab.winfo_children():w.destroy()
         f=self.card(self.moves_tab,'سجل الحركات','تاريخ كامل من إضافة الرصيد حتى الاستهلاك.');tree=ttk.Treeview(f,columns=('at','carton','company','color','action','weight','user'),show='headings',height=20)
