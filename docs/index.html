@@ -47,6 +47,7 @@
     .chip-add-icon{font-size:23px;font-weight:400;line-height:1}
     .add-chip .chip-meta{color:var(--teal);font-weight:600}
     details{border-top:1px solid var(--line);margin-top:10px;padding-top:9px}summary{cursor:pointer;color:var(--teal);font-size:12px;font-weight:600}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}.detail-grid div{min-width:0}.detail-grid small{display:block;color:var(--muted);font-size:10px}.detail-grid span{font-size:12px;overflow-wrap:anywhere}
+    .upload{border:1px dashed #a9c5c1;border-radius:11px;background:#fafdfe;padding:14px}.upload input{width:100%;font-size:12px}.help{font-size:11px;color:var(--muted);line-height:1.7;margin-top:8px}.sticker-preview{display:block;max-width:100%;max-height:300px;object-fit:contain;margin:12px auto 0;border-radius:10px;border:1px solid var(--line)}.ocr-output{white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;background:#f7faf9;padding:10px;border-radius:8px;font-size:12px;line-height:1.6}
     .toast{position:fixed;bottom:82px;left:50%;transform:translateX(-50%);background:#183747;color:white;padding:10px 14px;border-radius:9px;font-size:12px;z-index:5;max-width:90vw}
     @media(min-width:700px){.top{padding-left:max(16px,calc((100vw - 1000px)/2));padding-right:max(16px,calc((100vw - 1000px)/2))}.wrap{padding-top:24px}.stats{grid-template-columns:repeat(4,1fr)}.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.full{grid-column:auto}.full.wide{grid-column:1/-1}.bottom{position:sticky;top:56px;display:flex;justify-content:center;border-top:0;border-bottom:1px solid var(--line);padding:5px;background:white}.nav{width:145px;font-size:12px}.nav span{display:none}}
   </style>
@@ -60,7 +61,7 @@
       <input id="importFile" type="file" accept="application/json,.json" hidden onchange="importBackup(this.files[0])">
     </div>
   </header>
-  <aside class="notice">تنبيه: البيانات محفوظة في هذا المتصفح فقط، ولا تتزامن مع نسخة الكمبيوتر أو الأجهزة الأخرى. صدّر نسخة احتياطية بانتظام؛ مسح بيانات المتصفح قد يحذف المخزون. لا توجد هنا حسابات دخول أو قراءة OCR.</aside>
+  <aside class="notice">تنبيه: البيانات محفوظة في هذا المتصفح فقط، ولا تتزامن مع نسخة الكمبيوتر أو الأجهزة الأخرى. صدّر نسخة احتياطية بانتظام؛ مسح بيانات المتصفح قد يحذف المخزون. الصور تُحلل محليًا داخل المتصفح ولا تُرسل إلى خادم، لكن تنزيل محرك القراءة وبيانات اللغة يحتاج اتصالًا بالإنترنت أول مرة.</aside>
   <nav class="bottom">
     <button class="nav active" data-page="home" onclick="openPage('home')"><span>▤</span>الرئيسية</button>
     <button class="nav" data-page="add" onclick="openPage('add')"><span>＋</span>إضافة</button>
@@ -75,17 +76,17 @@
     const STORAGE_KEY='powder-inventory-pages-v1';
     const COLORS=['1001','1013','1015','1019','2004','3001','3010','3015','4000','5010','5007','5015','5016','6005','7001','7003','7015','7035','8001','8002','8003','8004','8006','8007','8014','8015','8016','8017','9010','9016'];
     const TEXTURES=['غامق محبب','غامق 7','فاتح 8','أبيض 3028','أحمر 308'];
-    const emptyState=()=>({cartons:[],movements:[],colors:[...COLORS],textures:[...TEXTURES]});
+    const emptyState=()=>({cartons:[],movements:[],colors:[...COLORS],textures:[...TEXTURES],mappings:{KA0718:'9016'},stickerImages:{}});
     function loadState(){
       const raw=localStorage.getItem(STORAGE_KEY);
       if(!raw)return emptyState();
       const saved=JSON.parse(raw);
       if(!saved||!Array.isArray(saved.cartons)||!Array.isArray(saved.movements))throw new Error('صيغة البيانات المحفوظة غير معروفة. لا تمسح بيانات الموقع قبل استعادة نسخة احتياطية.');
-      return {cartons:saved.cartons,movements:saved.movements,colors:Array.isArray(saved.colors)?saved.colors:[...COLORS],textures:Array.isArray(saved.textures)?saved.textures:[...TEXTURES],mappings:saved.mappings||{}};
+      return {cartons:saved.cartons,movements:saved.movements,colors:Array.isArray(saved.colors)?saved.colors:[...COLORS],textures:Array.isArray(saved.textures)?saved.textures:[...TEXTURES],mappings:{KA0718:'9016',...(saved.mappings&&typeof saved.mappings==='object'?saved.mappings:{})},stickerImages:saved.stickerImages&&typeof saved.stickerImages==='object'&&!Array.isArray(saved.stickerImages)?saved.stickerImages:{}};
     }
     let state;
     try{state=loadState()}catch(error){document.getElementById('page').innerHTML='<section class="card"><h2>تعذر فتح بيانات هذا المتصفح</h2><p class="sub">'+escapeHtml(error.message)+'</p></section>';throw error}
-    let activePage='home',showConsumed=false,toastTimer,powderCategory='ألوان',powderItem='',editingCartonId=null;
+    let activePage='home',showConsumed=false,toastTimer,powderCategory='ألوان',powderItem='',editingCartonId=null,pendingStickerImage=null,pendingImageId=null,stickerPreviewUrl='',tesseractScriptPromise=null,tesseractWorkerPromise=null;
     const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
     function persist(){
       try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state))}
@@ -113,6 +114,7 @@
       const colors=state.colors.map(value=>`<option>${escapeHtml(value)}</option>`).join('');
       const textures=state.textures.map(value=>`<option>${escapeHtml(value)}</option>`).join('');
       document.getElementById('page').innerHTML=title('إضافة كراتين','أدخل البيانات؛ يُسجل كل صندوق كوحدة مستقلة.')+
+        `<section class="card"><h2>قراءة صورة الاستيكر</h2><p class="sub">ارفع صورة واضحة لقراءة النص وملء الحقول التي يمكن التعرف عليها تلقائيًا. راجع النتائج قبل الحفظ.</p><div class="upload"><input id="stickerImage" type="file" accept="image/*" capture="environment" onchange="scanSticker(this.files[0])"><div id="scanStatus" class="help" role="status" aria-live="polite">الصورة تُعالج داخل هذا المتصفح؛ قد تستغرق القراءة بعض الوقت.</div></div><img id="stickerPreview" class="sticker-preview" alt="معاينة صورة الاستيكر" hidden><details id="ocrTextPanel" hidden><summary>النص المستخرج من الصورة</summary><pre id="ocrText" class="ocr-output"></pre></details></section>`+
         `<section class="card"><h2>بيانات الرصيد</h2><div class="grid">
         <div class="field"><label>الشركة</label><select id="company"><option>AkzoNobel</option><option>Union</option><option>Jetton</option></select></div>
         <div class="field"><label>الفئة</label><select id="category" onchange="updateColorOptions()"><option>ألوان</option><option>خشامنيوم</option></select></div>
@@ -129,12 +131,141 @@
         <div class="actions"><button class="btn primary" onclick="saveCartons()">حفظ وإضافة</button><button class="btn" onclick="addCustomItem()">إضافة لون/نوع</button></div></section>
         <section class="card"><h2>ربط كود الاستيكر باللون</h2><div class="grid"><div class="field"><label>كود الاستيكر</label><input id="mapCode" placeholder="مثال KA0718"></div><div class="field"><label>اللون</label><select id="mapColor">${colors}</select></div></div><div class="actions"><button class="btn" onclick="saveMapping()">حفظ الربط</button></div></section>`;
       updateColorOptions();
+      if(pendingStickerImage){const preview=document.getElementById('stickerPreview');preview.src=pendingStickerImage;preview.hidden=false}
     }
     function updateColorOptions(){
       const category=document.getElementById('category').value,select=document.getElementById('color');
       const values=category==='ألوان'?state.colors:state.textures,previous=select.value;
       select.innerHTML=values.map(value=>`<option>${escapeHtml(value)}</option>`).join('');
       if(values.includes(previous))select.value=previous;
+    }
+    function compressStickerImage(file){
+      const sourceUrl=URL.createObjectURL(file);
+      return new Promise((resolve,reject)=>{
+        const image=new Image();
+        image.onload=()=>{
+          URL.revokeObjectURL(sourceUrl);
+          const scale=Math.min(1,1400/Math.max(image.naturalWidth,image.naturalHeight));
+          const canvas=document.createElement('canvas');
+          canvas.width=Math.max(1,Math.round(image.naturalWidth*scale));
+          canvas.height=Math.max(1,Math.round(image.naturalHeight*scale));
+          const context=canvas.getContext('2d');
+          if(!context){reject(new Error('المتصفح لا يدعم تجهيز الصورة.'));return}
+          context.drawImage(image,0,0,canvas.width,canvas.height);
+          canvas.toBlob(blob=>{
+            if(!blob){reject(new Error('تعذر تجهيز الصورة للقراءة.'));return}
+            const reader=new FileReader();
+            reader.onload=()=>resolve({blob,dataUrl:reader.result});
+            reader.onerror=()=>reject(new Error('تعذر حفظ معاينة الصورة.'));
+            reader.readAsDataURL(blob);
+          },'image/jpeg',0.82);
+        };
+        image.onerror=()=>{URL.revokeObjectURL(sourceUrl);reject(new Error('تعذر فتح ملف الصورة.'))};
+        image.src=sourceUrl;
+      });
+    }
+    function loadTesseract(){
+      if(window.Tesseract)return Promise.resolve(window.Tesseract);
+      if(!tesseractScriptPromise)tesseractScriptPromise=new Promise((resolve,reject)=>{
+        const script=document.createElement('script');
+        script.src='https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+        script.onload=()=>window.Tesseract?resolve(window.Tesseract):reject(new Error('تم تحميل مكتبة القراءة لكن تعذر تشغيلها.'));
+        script.onerror=()=>reject(new Error('تعذر تحميل قارئ الصور. تحقق من اتصال الإنترنت ثم أعد المحاولة.'));
+        document.head.appendChild(script);
+      }).catch(error=>{tesseractScriptPromise=null;throw error});
+      return tesseractScriptPromise;
+    }
+    function getTesseractWorker(){
+      const status=document.getElementById('scanStatus');
+      return loadTesseract().then(Tesseract=>{
+        if(!tesseractWorkerPromise)tesseractWorkerPromise=Tesseract.createWorker('eng+ara',1,{
+          langPath:'https://tessdata.projectnaptha.com/4.0.0',
+          logger:message=>{
+            const currentStatus=document.getElementById('scanStatus');
+            if(currentStatus&&message.status){
+              const percent=Number.isFinite(message.progress)?` ${Math.round(message.progress*100)}%`:'';
+              currentStatus.textContent='جاري تجهيز قارئ الصور: '+message.status+percent;
+            }
+          }
+        }).catch(error=>{tesseractWorkerPromise=null;throw error});
+        if(status)status.textContent='جاري تحميل محرك القراءة وبيانات اللغة…';
+        return tesseractWorkerPromise;
+      });
+    }
+    function fillFromOcr(text){
+      const normalized=text.replace(/\r/g,'\n').replace(/[٠-٩]/g,d=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))).replace(/[۰-۹]/g,d=>String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
+      const upper=normalized.toUpperCase(),filled=[];
+      const put=(id,value,label)=>{
+        const input=document.getElementById(id);
+        if(input&&value){input.value=value;filled.push(label)}
+      };
+      const shade=upper.match(/\b[A-Z]{2,3}O?\s*[- ]?\s*\d{3,8}\b/);
+      if(shade){
+        let code=shade[0].replace(/[^A-Z0-9]/g,'').replace(/^([A-Z]{2})O(?=\d)/,(_,prefix)=>prefix+'0');
+        put('sticker',code,'كود الاستيكر');
+      }
+      const mapped=shade&&(state.mappings||{})[shade[0].replace(/[^A-Z0-9]/g,'').replace(/^([A-Z]{2})O(?=\d)/,(_,prefix)=>prefix+'0')];
+      const directColor=state.colors.find(color=>new RegExp(`(^|[^A-Z0-9])${color.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}($|[^A-Z0-9])`,'i').test(upper));
+      const recognizedColor=state.colors.includes(mapped)?mapped:directColor;
+      if(recognizedColor){
+        document.getElementById('category').value='ألوان';updateColorOptions();
+        document.getElementById('color').value=recognizedColor;filled.push('اللون '+recognizedColor);
+      }
+      const labeledProduct=normalized.match(/(?:product\s*(?:code|no\.?|number)|item\s*code|كود\s*المنتج|رقم\s*المنتج)\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{1,})/i);
+      if(labeledProduct)put('product',labeledProduct[1],'كود المنتج');
+      else{
+        const beforeBatch=upper.split(/BATCH|رقم\s*التشغيلة/,1)[0],numericCodes=beforeBatch.match(/(?<![A-Z0-9])\d{6,10}(?![A-Z0-9])/g);
+        if(numericCodes)put('product',numericCodes[0],'كود المنتج');
+      }
+      const batch=upper.match(/(?:\bBATCH\b|رقم\s*التشغيلة)\s*[:#-]?\s*([A-Z0-9][A-Z0-9 \t-]{4,})/i);
+      if(batch)put('batch',batch[1].replace(/[ \t-]/g,''),'رقم التشغيلة');
+      const datePattern='(\\d{1,2}[./-]\\d{4}|\\d{1,2}[./-]\\d{1,2}[./-]\\d{2,4}|\\d{4}[./-]\\d{1,2})';
+      const production=normalized.match(new RegExp('((?:MANUF\\.?|MFG\\.?|MFD\\.?|MANUFACTUR(?:E|ED|ING)?|PRODUCTION|PROD\\.?)(?:\\s*DATE)?|تاريخ\\s*الإنتاج)[\\s:#+-]*'+datePattern,'i'));
+      if(production)put('production',production[2].replace(/\./g,'/'),'تاريخ الإنتاج');
+      const expiry=normalized.match(new RegExp('(EXP\\.?\\s*(?:DATE)?|EXPIRY\\s*DATE|EXPIRATION\\s*DATE|USE\\s*BY|BEST\\s*BEFORE|تاريخ\\s*الانتهاء|تاريخ\\s*الصلاحية)[\\s:#+-]*'+datePattern,'i'));
+      if(expiry)put('expiry',expiry[2].replace(/\./g,'/'),'تاريخ الانتهاء');
+      const weight=normalized.match(/(?:NET\s*WEIGHT|WEIGHT|وزن\s*(?:الكرتونة)?|الوزن)[\s:#+-]*(\d+(?:[.,]\d+)?)[ \t]*(kg|kgs|kilograms|g|grams|جم|كجم)?/i);
+      if(weight){
+        let value=Number(weight[1].replace(',','.'));
+        if(['g','grams','جم'].includes((weight[2]||'').toLowerCase()))value/=1000;
+        put('weight',String(value),'الوزن لكل كرتونة');
+      }
+      const quantity=normalized.match(/(?:qty|quantity|cartons|carton\s*count|boxes|عدد\s*الكراتين|الكمية)\s*[:#-]?\s*(\d+)/i);
+      if(quantity)put('quantity',quantity[1],'عدد الكراتين');
+      const sender=normalized.match(/(?:sender|destination|طرف\s*الوصول|الطرف\s*المرسل)\s*[:#-]?\s*([MHA])\b/i);
+      if(sender){document.getElementById('sender').value=sender[1].toUpperCase();filled.push('الطرف المرسل')}
+      const company=['AkzoNobel','Union','Jetton'].find(name=>normalized.toLowerCase().includes(name.toLowerCase()));
+      if(company){document.getElementById('company').value=company;filled.push('الشركة')}
+      const texture=state.textures.find(name=>normalized.toLowerCase().includes(name.toLowerCase()));
+      if(texture){document.getElementById('category').value='خشامنيوم';updateColorOptions();document.getElementById('color').value=texture;filled.push('نوع الخشامنيوم')}
+      return [...new Set(filled)];
+    }
+    async function scanSticker(file){
+      if(!file)return;
+      pendingStickerImage=null;pendingImageId=null;
+      const status=document.getElementById('scanStatus'),preview=document.getElementById('stickerPreview'),textPanel=document.getElementById('ocrTextPanel');
+      if(stickerPreviewUrl){URL.revokeObjectURL(stickerPreviewUrl);stickerPreviewUrl=''}
+      if(file.type&&!file.type.startsWith('image/')){preview.hidden=true;showToast('اختر ملف صورة صالحًا.');return}
+      if(file.size>15*1024*1024){preview.hidden=true;showToast('حجم الصورة أكبر من 15 ميجابايت.');return}
+      stickerPreviewUrl=URL.createObjectURL(file);preview.src=stickerPreviewUrl;preview.hidden=false;
+      textPanel.hidden=true;document.getElementById('ocrText').textContent='';
+      status.textContent='جاري تجهيز الصورة…';
+      try{
+        const prepared=await compressStickerImage(file);
+        pendingStickerImage=prepared.dataUrl;pendingImageId='sticker-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+        status.textContent='جاري قراءة بيانات الاستيكر…';
+        const worker=await getTesseractWorker();
+        await worker.setParameters({tessedit_pageseg_mode:'6'});
+        const {data}=await worker.recognize(prepared.blob),text=(data.text||'').trim();
+        if(!document.getElementById('scanStatus'))return;
+        document.getElementById('ocrText').textContent=text;textPanel.hidden=!text;
+        const filled=fillFromOcr(text);
+        status.textContent=text?(filled.length?'تم التعرف على: '+filled.join('، ')+'. راجع البيانات قبل الحفظ.':'تمت قراءة الصورة، لكن لم تُكتشف حقول مؤكدة؛ راجع النص وأدخل البيانات يدويًا.'):'لم يتم التعرف على نص. جرّب تصوير الاستيكر بوضوح وبشكل مستقيم.';
+        if(filled.length)showToast('تم ملء '+filled.length+' من الحقول تلقائيًا.');
+      }catch(error){
+        status.textContent=error.message||'تعذرت قراءة الصورة.';
+        showToast(status.textContent);
+      }
     }
     function addCustomItem(categoryOverride){
       const category=categoryOverride||document.getElementById('category').value;
@@ -154,11 +285,13 @@
       if(!Number.isInteger(quantity)||quantity<1||quantity>1000||!Number.isFinite(weight)||weight<=0){showToast('أدخل عددًا صحيحًا ووزنًا أكبر من صفر');return}
       const category=document.getElementById('category').value,sticker=document.getElementById('sticker').value.trim().toUpperCase();
       const mapped=(state.mappings||{})[sticker],color=mapped||document.getElementById('color').value;
+      const imageId=pendingStickerImage&&pendingImageId?pendingImageId:null;
+      if(imageId){state.stickerImages=state.stickerImages||{};state.stickerImages[imageId]=pendingStickerImage}
       for(let index=0;index<quantity;index++){
-        const carton={id:Date.now()+index,company:document.getElementById('company').value,category,color,product_code:document.getElementById('product').value.trim(),sticker_code:sticker,batch:document.getElementById('batch').value.trim(),production:document.getElementById('production').value.trim(),expiry:document.getElementById('expiry').value.trim(),initial_weight:weight,remaining_weight:weight,sender:document.getElementById('sender').value,notes:document.getElementById('notes').value.trim(),opened:false,factory:false,consumed:false,deleted:false,created_at:timestamp(),updated_at:timestamp()};
+        const carton={id:Date.now()+index,company:document.getElementById('company').value,category,color,product_code:document.getElementById('product').value.trim(),sticker_code:sticker,batch:document.getElementById('batch').value.trim(),production:document.getElementById('production').value.trim(),expiry:document.getElementById('expiry').value.trim(),initial_weight:weight,remaining_weight:weight,sender:document.getElementById('sender').value,notes:document.getElementById('notes').value.trim(),image_id:imageId,opened:false,factory:false,consumed:false,deleted:false,created_at:timestamp(),updated_at:timestamp()};
         state.cartons.unshift(carton);record(carton,'إضافة رصيد جديد',`${weight} كجم`);
       }
-      persist();showToast(`تم تسجيل ${quantity} كرتونة`);openPage('track');
+      persist();pendingStickerImage=null;pendingImageId=null;if(stickerPreviewUrl){URL.revokeObjectURL(stickerPreviewUrl);stickerPreviewUrl=''}showToast(`تم تسجيل ${quantity} كرتونة`);openPage('track');
     }
     function renderTrack(){
       const rows=activeCartons().filter(item=>showConsumed?item.consumed:!item.consumed);
@@ -224,9 +357,11 @@
       page.insertAdjacentHTML('beforeend',`<section class="card"><h2>${escapeHtml(powderCategory)} / ${escapeHtml(powderItem||'—')}</h2><p class="sub">عدد الكراتين: ${rows.length} · الوزن المتبقي: ${weight.toFixed(1)} كجم</p>${rows.length?rows.map(powderCartonCard).join(''):'<div class="empty">لا يوجد رصيد متاح لهذا الصنف.</div>'}</section>`);
     }
     function powderCartonCard(item){
-      const values=[['الشركة',item.company],['الفئة',item.category],['اللون / النوع',item.color],['كود المنتج',item.product_code],['كود الاستيكر',item.sticker_code],['رقم التشغيلة',item.batch],['تاريخ الإنتاج',item.production],['تاريخ الانتهاء',item.expiry],['الوزن الأصلي',`${item.initial_weight} كجم`],['الوزن المتبقي',`${item.remaining_weight} كجم`],['الطرف المرسل',item.sender],['حالة الفتح',item.opened?'مفتوحة':'غير مفتوحة'],['ملاحظات',item.notes],['تاريخ الإضافة',item.created_at],['أضيفت بواسطة',item.created_by],['صورة الاستيكر',item.image_path]];
+      const values=[['الشركة',item.company],['الفئة',item.category],['اللون / النوع',item.color],['كود المنتج',item.product_code],['كود الاستيكر',item.sticker_code],['رقم التشغيلة',item.batch],['تاريخ الإنتاج',item.production],['تاريخ الانتهاء',item.expiry],['الوزن الأصلي',`${item.initial_weight} كجم`],['الوزن المتبقي',`${item.remaining_weight} كجم`],['الطرف المرسل',item.sender],['حالة الفتح',item.opened?'مفتوحة':'غير مفتوحة'],['ملاحظات',item.notes],['تاريخ الإضافة',item.created_at],['أضيفت بواسطة',item.created_by]];
+      const image=state.stickerImages&&item.image_id?state.stickerImages[item.image_id]:null;
+      const imagePreview=typeof image==='string'&&/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(image)?`<details><summary>صورة الاستيكر</summary><img class="sticker-preview" src="${image}" alt="صورة استيكر الكرتونة ${item.id}"></details>`:'';
       const status=item.factory?'داخل المصنع':item.opened?'مفتوحة':'في المخزن';
-      return `<article class="row-card"><div class="row-head"><div><div class="row-title">كرتونة ${item.id}</div><div class="meta">تشغيلة ${escapeHtml(item.batch||'—')} · منتج ${escapeHtml(item.product_code||'—')}<br>الإنتاج ${escapeHtml(item.production||'—')} · الانتهاء ${escapeHtml(item.expiry||'—')}<br>${item.remaining_weight} من ${item.initial_weight} كجم</div></div><span class="pill ${item.factory?'factory':''} ${item.opened?'opened':''}">${status}</span></div><details><summary>عرض البيانات الكاملة</summary><div class="detail-grid">${values.map(([label,value])=>`<div><small>${label}</small><span>${escapeHtml(value||'—')}</span></div>`).join('')}</div></details><div class="row-actions"><button class="btn small primary" onclick="editCarton(${item.id})">تعديل البيانات</button><button class="btn small danger" onclick="deleteCarton(${item.id})">حذف من الرصيد</button></div></article>`;
+      return `<article class="row-card"><div class="row-head"><div><div class="row-title">كرتونة ${item.id}</div><div class="meta">تشغيلة ${escapeHtml(item.batch||'—')} · منتج ${escapeHtml(item.product_code||'—')}<br>الإنتاج ${escapeHtml(item.production||'—')} · الانتهاء ${escapeHtml(item.expiry||'—')}<br>${item.remaining_weight} من ${item.initial_weight} كجم</div></div><span class="pill ${item.factory?'factory':''} ${item.opened?'opened':''}">${status}</span></div><details><summary>عرض البيانات الكاملة</summary><div class="detail-grid">${values.map(([label,value])=>`<div><small>${label}</small><span>${escapeHtml(value||'—')}</span></div>`).join('')}</div></details>${imagePreview}<div class="row-actions"><button class="btn small primary" onclick="editCarton(${item.id})">تعديل البيانات</button><button class="btn small danger" onclick="deleteCarton(${item.id})">حذف من الرصيد</button></div></article>`;
     }
     function editCarton(id){
       const item=state.cartons.find(row=>row.id===id&&!row.deleted);
@@ -277,7 +412,7 @@
         const backup=JSON.parse(await file.text()),data=backup.data;
         if(backup.format!=='powder-inventory-pages-v1'||!data||!Array.isArray(data.cartons)||!Array.isArray(data.movements))throw new Error('الملف ليس نسخة احتياطية معروفة لهذا التطبيق.');
         if(!confirm('سيتم استبدال بيانات هذا المتصفح بمحتوى النسخة الاحتياطية. هل تريد المتابعة؟'))return;
-        state={cartons:data.cartons,movements:data.movements,colors:Array.isArray(data.colors)?data.colors:[...COLORS],textures:Array.isArray(data.textures)?data.textures:[...TEXTURES],mappings:data.mappings||{}};
+        state={cartons:data.cartons,movements:data.movements,colors:Array.isArray(data.colors)?data.colors:[...COLORS],textures:Array.isArray(data.textures)?data.textures:[...TEXTURES],mappings:{KA0718:'9016',...(data.mappings&&typeof data.mappings==='object'?data.mappings:{})},stickerImages:data.stickerImages&&typeof data.stickerImages==='object'&&!Array.isArray(data.stickerImages)?data.stickerImages:{}};
         persist();showToast('تم استيراد النسخة الاحتياطية');openPage(activePage);
       }catch(error){alert('تعذر استيراد النسخة الاحتياطية: '+error.message)}
       finally{document.getElementById('importFile').value=''}
