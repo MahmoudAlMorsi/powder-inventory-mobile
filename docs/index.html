@@ -139,26 +139,53 @@
       select.innerHTML=values.map(value=>`<option>${escapeHtml(value)}</option>`).join('');
       if(values.includes(previous))select.value=previous;
     }
+    function canvasToBlob(canvas,type,quality){
+      return new Promise((resolve,reject)=>{
+        canvas.toBlob(blob=>blob?resolve(blob):reject(new Error('تعذر تجهيز الصورة للقراءة.')),type,quality);
+      });
+    }
     function compressStickerImage(file){
       const sourceUrl=URL.createObjectURL(file);
       return new Promise((resolve,reject)=>{
         const image=new Image();
-        image.onload=()=>{
+        image.onload=async()=>{
           URL.revokeObjectURL(sourceUrl);
-          const scale=Math.min(1,1400/Math.max(image.naturalWidth,image.naturalHeight));
-          const canvas=document.createElement('canvas');
-          canvas.width=Math.max(1,Math.round(image.naturalWidth*scale));
-          canvas.height=Math.max(1,Math.round(image.naturalHeight*scale));
-          const context=canvas.getContext('2d');
-          if(!context){reject(new Error('المتصفح لا يدعم تجهيز الصورة.'));return}
-          context.drawImage(image,0,0,canvas.width,canvas.height);
-          canvas.toBlob(blob=>{
-            if(!blob){reject(new Error('تعذر تجهيز الصورة للقراءة.'));return}
+          try{
+            const maxDimension=Math.max(image.naturalWidth,image.naturalHeight);
+            const storageScale=Math.min(1,1400/maxDimension);
+            const storageCanvas=document.createElement('canvas');
+            storageCanvas.width=Math.max(1,Math.round(image.naturalWidth*storageScale));
+            storageCanvas.height=Math.max(1,Math.round(image.naturalHeight*storageScale));
+            const storageContext=storageCanvas.getContext('2d');
+            if(!storageContext)throw new Error('المتصفح لا يدعم تجهيز الصورة.');
+            storageContext.drawImage(image,0,0,storageCanvas.width,storageCanvas.height);
+            const ocrScale=Math.min(3,2400/maxDimension);
+            const ocrCanvas=document.createElement('canvas');
+            ocrCanvas.width=Math.max(1,Math.round(image.naturalWidth*ocrScale));
+            ocrCanvas.height=Math.max(1,Math.round(image.naturalHeight*ocrScale));
+            const ocrContext=ocrCanvas.getContext('2d');
+            if(!ocrContext)throw new Error('المتصفح لا يدعم تحسين الصورة.');
+            ocrContext.filter='grayscale(1) contrast(1.35)';
+            ocrContext.drawImage(image,0,0,ocrCanvas.width,ocrCanvas.height);
+            const topHeight=Math.max(1,Math.round(ocrCanvas.height*0.38));
+            const bottomY=Math.round(ocrCanvas.height*0.80),bottomHeight=Math.max(1,ocrCanvas.height-bottomY);
+            const topCanvas=document.createElement('canvas'),bottomCanvas=document.createElement('canvas');
+            topCanvas.width=ocrCanvas.width;topCanvas.height=topHeight;
+            bottomCanvas.width=ocrCanvas.width;bottomCanvas.height=bottomHeight;
+            const topContext=topCanvas.getContext('2d'),bottomContext=bottomCanvas.getContext('2d');
+            if(!topContext||!bottomContext)throw new Error('تعذر تجهيز مناطق قراءة الاستيكر.');
+            topContext.drawImage(ocrCanvas,0,0,ocrCanvas.width,topHeight,0,0,topCanvas.width,topHeight);
+            bottomContext.drawImage(ocrCanvas,0,bottomY,ocrCanvas.width,bottomHeight,0,0,bottomCanvas.width,bottomHeight);
+            const [blob,topBlob,bottomBlob]=await Promise.all([
+              canvasToBlob(storageCanvas,'image/jpeg',0.82),
+              canvasToBlob(topCanvas,'image/png'),
+              canvasToBlob(bottomCanvas,'image/png')
+            ]);
             const reader=new FileReader();
-            reader.onload=()=>resolve({blob,dataUrl:reader.result});
+            reader.onload=()=>resolve({blob,dataUrl:reader.result,ocrBlobs:[topBlob,bottomBlob]});
             reader.onerror=()=>reject(new Error('تعذر حفظ معاينة الصورة.'));
             reader.readAsDataURL(blob);
-          },'image/jpeg',0.82);
+          }catch(error){reject(error)}
         };
         image.onerror=()=>{URL.revokeObjectURL(sourceUrl);reject(new Error('تعذر فتح ملف الصورة.'))};
         image.src=sourceUrl;
@@ -192,6 +219,13 @@
         return tesseractWorkerPromise;
       });
     }
+    function ocrCodeVariants(value){
+      const compact=value.toUpperCase().replace(/[^A-Z0-9]/g,''),variants=[compact];
+      for(let index=2;index<compact.length-1;index++){
+        if(compact[index]==='O'&&/\d/.test(compact[index+1]))variants.push(compact.slice(0,index)+'0'+compact.slice(index+1),compact.slice(0,index)+compact.slice(index+1));
+      }
+      return [...new Set(variants)];
+    }
     function fillFromOcr(text){
       const normalized=text.replace(/\r/g,'\n').replace(/[٠-٩]/g,d=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))).replace(/[۰-۹]/g,d=>String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
       const upper=normalized.toUpperCase(),filled=[];
@@ -199,12 +233,21 @@
         const input=document.getElementById(id);
         if(input&&value){input.value=value;filled.push(label)}
       };
-      const shade=upper.match(/\b[A-Z]{2,3}O?\s*[- ]?\s*\d{3,8}\b/);
-      if(shade){
-        let code=shade[0].replace(/[^A-Z0-9]/g,'').replace(/^([A-Z]{2})O(?=\d)/,(_,prefix)=>prefix+'0');
-        put('sticker',code,'كود الاستيكر');
+      const mappings={};
+      for(const [key,value] of Object.entries(state.mappings||{}))mappings[key.toUpperCase()]=value;
+      const codePattern=/\b[A-Z]{2,3}O?\s*[- ]?\s*\d{3,8}\b/g;
+      let code='',fallbackCode='';
+      for(const match of upper.matchAll(codePattern)){
+        const variants=ocrCodeVariants(match[0]),mappedCode=variants.find(value=>Object.prototype.hasOwnProperty.call(mappings,value));
+        if(mappedCode){code=mappedCode;break}
+        const lineStart=upper.lastIndexOf('\n',match.index)+1;
+        const lineEnd=upper.indexOf('\n',match.index+match[0].length);
+        const context=upper.slice(lineStart,lineEnd<0?upper.length:lineEnd);
+        if(!fallbackCode&&!/\b(?:SDS|QUALICOAT)\b/.test(context))fallbackCode=variants[0];
       }
-      const mapped=shade&&(state.mappings||{})[shade[0].replace(/[^A-Z0-9]/g,'').replace(/^([A-Z]{2})O(?=\d)/,(_,prefix)=>prefix+'0')];
+      code=code||fallbackCode;
+      if(code)put('sticker',code,'كود الاستيكر');
+      const mapped=code&&mappings[code];
       const directColor=state.colors.find(color=>new RegExp(`(^|[^A-Z0-9])${color.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}($|[^A-Z0-9])`,'i').test(upper));
       const recognizedColor=state.colors.includes(mapped)?mapped:directColor;
       if(recognizedColor){
@@ -256,12 +299,18 @@
         status.textContent='جاري قراءة بيانات الاستيكر…';
         const worker=await getTesseractWorker();
         await worker.setParameters({tessedit_pageseg_mode:'6'});
-        const {data}=await worker.recognize(prepared.blob),text=(data.text||'').trim();
+        const recognized=[],filled=[];
+        for(let index=0;index<prepared.ocrBlobs.length;index++){
+          status.textContent='جاري قراءة '+(index===0?'أعلى':'أسفل')+' الاستيكر…';
+          const {data}=await worker.recognize(prepared.ocrBlobs[index]),text=(data.text||'').trim();
+          if(text){recognized.push(text);filled.push(...fillFromOcr(text))}
+        }
+        const text=recognized.join('\n');
         if(!document.getElementById('scanStatus'))return;
         document.getElementById('ocrText').textContent=text;textPanel.hidden=!text;
-        const filled=fillFromOcr(text);
-        status.textContent=text?(filled.length?'تم التعرف على: '+filled.join('، ')+'. راجع البيانات قبل الحفظ.':'تمت قراءة الصورة، لكن لم تُكتشف حقول مؤكدة؛ راجع النص وأدخل البيانات يدويًا.'):'لم يتم التعرف على نص. جرّب تصوير الاستيكر بوضوح وبشكل مستقيم.';
-        if(filled.length)showToast('تم ملء '+filled.length+' من الحقول تلقائيًا.');
+        const fields=[...new Set(filled)];
+        status.textContent=text?(fields.length?'تم التعرف على: '+fields.join('، ')+'. راجع البيانات قبل الحفظ.':'تمت قراءة الصورة، لكن لم تُكتشف حقول مؤكدة؛ راجع النص وأدخل البيانات يدويًا.'):'لم يتم التعرف على نص. جرّب تصوير الاستيكر بوضوح وبشكل مستقيم.';
+        if(fields.length)showToast('تم ملء '+fields.length+' من الحقول تلقائيًا.');
       }catch(error){
         status.textContent=error.message||'تعذرت قراءة الصورة.';
         showToast(status.textContent);

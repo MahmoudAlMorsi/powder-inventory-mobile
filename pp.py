@@ -2,7 +2,7 @@ import tkinter as tk
 import traceback
 from typing import Any
 from tkinter import ttk, messagebox, filedialog, simpledialog
-import sqlite3, hashlib, secrets, os, sys, subprocess, shutil, json, threading, datetime, re
+import sqlite3, hashlib, secrets, os, sys, subprocess, shutil, json, threading, datetime, re, tempfile
 from pathlib import Path
 
 APP_NAME = 'مخزون البودرة'
@@ -17,6 +17,14 @@ DATA_DIR.mkdir(exist_ok=True); UPLOAD_DIR.mkdir(exist_ok=True)
 
 def connect():
     c=sqlite3.connect(DB_PATH); c.row_factory=sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
+
+def ocr_code_variants(value):
+    compact=re.sub(r'[^A-Z0-9]','',value.upper())
+    variants=[compact]
+    for index in range(2,len(compact)-1):
+        if compact[index]=='O' and compact[index+1].isdigit():
+            variants.extend((compact[:index]+'0'+compact[index+1:],compact[:index]+compact[index+1:]))
+    return list(dict.fromkeys(variants))
 
 def hash_password(password, salt=None):
     salt=salt or secrets.token_bytes(16)
@@ -325,21 +333,55 @@ class PowderApp:
         if ocr_bin is None:
             return messagebox.showerror('قارئ الصور غير موجود','لم يتم العثور على Tesseract. تحقق من مسار التثبيت ثم أعد تشغيل البرنامج.')
         try:
-            # Sticker layouts vary, so try block, column, and sparse-text segmentation.
+            with connect() as c:
+                known_codes={row['code'].upper() for row in c.execute('SELECT code FROM color_codes').fetchall()}
             candidates = []
             errors = []
-            for lang in ('eng', 'eng+ara'):
-                for psm in ('6', '11', '4'):
-                    result = subprocess.run(
-                        [ocr_bin, self.photo_path, 'stdout', '-l', lang, '--psm', psm, '--dpi', '300'],
-                        capture_output=True, text=True, timeout=45, check=False
-                    )
-                    text = (result.stdout or '').strip()
-                    if result.returncode == 0 and text:
-                        candidates.append(text)
-                    elif result.stderr:
-                        errors.append(result.stderr.strip())
-            out = max(candidates, key=len, default='')
+            preprocessing_note=''
+            try:
+                from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+            except ImportError:
+                ocr_inputs=[
+                    (self.photo_path,'eng','6'),(self.photo_path,'eng','11'),
+                    (self.photo_path,'eng','4'),(self.photo_path,'eng+ara','6'),
+                    (self.photo_path,'eng+ara','11'),(self.photo_path,'eng+ara','4')
+                ]
+                preprocessing_note='\n\nتنبيه: لم تتوفر مكتبة Pillow لتحسين الصورة.'
+                self._collect_ocr_candidates(ocr_bin,ocr_inputs,candidates,errors)
+            else:
+                with tempfile.TemporaryDirectory(prefix='powder-ocr-') as work_dir:
+                    with Image.open(self.photo_path) as source:
+                        image=ImageOps.exif_transpose(source)
+                        image=ImageOps.autocontrast(ImageOps.grayscale(image),cutoff=1)
+                        scale=min(2.5,2400/max(image.size))
+                        if scale>1:
+                            image=image.resize((round(image.width*scale),round(image.height*scale)),Image.Resampling.LANCZOS)
+                        image=ImageEnhance.Contrast(image).enhance(1.35)
+                        image=image.filter(ImageFilter.UnsharpMask(radius=2,percent=140,threshold=3))
+                        image_width,image_height=image.size
+                        full_path=Path(work_dir)/'enhanced.png'
+                        top_path=Path(work_dir)/'top.png'
+                        bottom_path=Path(work_dir)/'bottom.png'
+                        image.save(full_path)
+                        image.crop((0,0,image_width,round(image_height*0.38))).save(top_path)
+                        image.crop((0,round(image_height*0.80),image_width,image_height)).save(bottom_path)
+                    ocr_inputs=[
+                        (self.photo_path,'eng','6'),(str(full_path),'eng','6'),
+                        (str(full_path),'eng','11'),(str(top_path),'eng','6'),
+                        (str(bottom_path),'eng','6'),(str(full_path),'eng+ara','6')
+                    ]
+                    self._collect_ocr_candidates(ocr_bin,ocr_inputs,candidates,errors)
+            def quality(text):
+                upper=text.upper()
+                score=sum(bool(re.search(pattern,upper)) for pattern in (
+                    r'\b\d{6,10}\b',r'\bBATCH\b',r'\bNET\s*WEIGHT\b',
+                    r'\b(?:MANUF|MFG|MFD)\b',r'\bEXP\b'
+                ))
+                code_pattern=r'\b[A-Z]{2,3}O?\s*[- ]?\s*\d{3,8}\b'
+                if any(set(ocr_code_variants(match.group(0)))&known_codes for match in re.finditer(code_pattern,upper)):
+                    score+=3
+                return score,len(text)
+            out = max(candidates, key=quality, default='')
             if not out:
                 detail = errors[-1] if errors else 'لم يستخرج Tesseract أي حروف من الصورة.'
                 self.photo_label.config(text='تمت المحاولة ولم يُقرأ نص؛ الصورة مرفقة')
@@ -351,10 +393,19 @@ class PowderApp:
             self.ocr_preview.delete('1.0','end')
             self.ocr_preview.insert('1.0',out[:12000])
             self.photo_label.config(text='اكتملت القراءة: '+Path(self.photo_path).name)
-            messagebox.showinfo('اكتملت قراءة الاستيكر',('تم ملء الحقول التالية: '+('، '.join(found) if found else 'لم نتعرف على حقول مؤكدة')+'\n\nراجع النص والحقول قبل الحفظ.'))
+            messagebox.showinfo('اكتملت قراءة الاستيكر',('تم ملء الحقول التالية: '+('، '.join(found) if found else 'لم نتعرف على حقول مؤكدة')+preprocessing_note+'\n\nراجع النص والحقول قبل الحفظ.'))
         except Exception as e:
             self.photo_label.config(text='تعذرت القراءة؛ الصورة ما زالت مرفقة')
             messagebox.showerror('تعذرت القراءة','حدثت مشكلة أثناء تشغيل Tesseract.\n'+str(e)[:1200])
+    def _collect_ocr_candidates(self,ocr_bin,ocr_inputs,candidates,errors):
+        for image_path,lang,psm in ocr_inputs:
+            result=subprocess.run(
+                [ocr_bin,image_path,'stdout','-l',lang,'--psm',psm,'--dpi','300'],
+                capture_output=True,text=True,timeout=45,check=False
+            )
+            text=(result.stdout or '').strip()
+            if result.returncode==0 and text:candidates.append(text)
+            elif result.stderr:errors.append(result.stderr.strip())
     def fill_entry(self,key,value):
         value=(value or '').strip()
         if not value:return False
@@ -369,16 +420,29 @@ class PowderApp:
         filled=[]
         def put(key,value,title):
             if self.fill_entry(key,value):filled.append(title)
-        # This label prints the shade code with two letters followed by digits.
-        # OCR may confuse zero with the letter O, as in KAO0718.
-        code_match=re.search(r'\b[A-Z]{2,3}O?\s*[- ]?\s*\d{3,8}\b',upper)
-        if code_match:
-            code=re.sub(r'[^A-Z0-9]','',code_match.group(0))
-            code=re.sub(r'(?<=[A-Z]{2})O(?=\d)','0',code)
+        code_pattern=r'\b[A-Z]{2,3}O?\s*[- ]?\s*\d{3,8}\b'
+        with connect() as c:
+            code_mappings={row['code'].upper():row['color'] for row in c.execute('SELECT code,color FROM color_codes').fetchall()}
+        code_match=None
+        fallback_code=None
+        for match in re.finditer(code_pattern,upper):
+            variants=ocr_code_variants(match.group(0))
+            mapped_code=next((variant for variant in variants if variant in code_mappings),None)
+            if mapped_code:
+                code_match=mapped_code
+                break
+            line_start=upper.rfind('\n',0,match.start())+1
+            line_end=upper.find('\n',match.end())
+            if line_end<0:line_end=len(upper)
+            context=upper[line_start:line_end]
+            if fallback_code is None and not re.search(r'\b(?:SDS|QUALICOAT)\b',context):
+                fallback_code=variants[0]
+        code=code_match or fallback_code
+        if code:
             put('code',code,'كود اللون')
-            with connect() as c:mapped=c.execute('SELECT color FROM color_codes WHERE code=?',(code,)).fetchone()
-            if mapped and mapped['color'] in COLORS:
-                self.form['color'].set(mapped['color']);filled.append('تصنيف اللون '+mapped['color'])
+            mapped_color=code_mappings.get(code)
+            if mapped_color in COLORS:
+                self.form['color'].set(mapped_color);filled.append('تصنيف اللون '+mapped_color)
         # Product identifiers on these labels are unlabelled numeric codes (e.g. 5562037).
         labeled_product=re.search(r'(?:product\s*(?:code|no\.?|number)|item\s*code|كود\s*المنتج|رقم\s*المنتج)\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{1,})',normalized,re.I)
         if labeled_product:
